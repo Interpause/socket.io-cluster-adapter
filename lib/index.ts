@@ -466,7 +466,7 @@ export function setupPrimary(pubFunc?: (msg: any) => void) {
       return;
     }
 
-    if (pubFunc) pubFunc(message);
+    if (worker.id !== -1 && pubFunc) pubFunc(message);
 
     switch (message.type) {
       case EventType.FETCH_SOCKETS_RESPONSE:
