@@ -503,5 +503,5 @@ export function setupPrimary(pubFunc?: (msg: any) => void) {
     }
   });
 
-  if (pubFunc) return (msg: any) => cluster.emit("message", msg);
+  if (pubFunc) return (msg: any) => cluster.emit("message", -1, msg);
 }
