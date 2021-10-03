@@ -1,11 +1,14 @@
 import cluster = require("cluster");
 import { Adapter, BroadcastOptions, Room } from "socket.io-adapter";
-import { randomBytes } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
+import { serialize, deserialize } from "v8";
 
 const randomId = () => randomBytes(8).toString("hex");
 const debug = require("debug")("socket.io-cluster-adapter");
 
 const MESSAGE_SOURCE = "_sio_adapter";
+const REDIS_CHANNEL = "socket.io-cluster-forwarding";
+const REDIS_SENDER_ID = randomUUID();
 const hasOwnProperty = Object.prototype.hasOwnProperty;
 
 /**
@@ -453,11 +456,46 @@ export class ClusterAdapter extends Adapter {
   }
 }
 
-export function setupPrimary() {
+export function setupPrimary(): void;
+export function setupPrimary(pubClient: any, subClient: any): void;
+export function setupPrimary(pubClient?: any, subClient?: any) {
+  if (pubClient) {
+    pubClient.on("error", debug);
+    subClient.on("error", debug);
+
+    // receive forwarded events from redis
+    subClient.subscribe(REDIS_CHANNEL, debug);
+    subClient.on("messageBuffer", (channel, message) => {
+      if (channel !== REDIS_CHANNEL) {
+        return;
+      }
+      const msg = deserialize(message);
+      if (msg.redisSenderId === REDIS_SENDER_ID) {
+        return;
+      }
+      cluster.emit("message", msg);
+    });
+  }
+
   cluster.on("message", (worker, message) => {
     const isValidSource = message?.source === MESSAGE_SOURCE;
     if (!isValidSource) {
       return;
+    }
+
+    // forwards event over redis
+    if (pubClient) {
+      switch (message.type) {
+        case EventType.WORKER_EXIT:
+        case EventType.WORKER_INIT:
+        case EventType.WORKER_PING:
+          //ignore local worker events
+          break;
+        default:
+          // prevent duplicating own event
+          message.redisSenderId = REDIS_SENDER_ID;
+          pubClient.publish(REDIS_CHANNEL, serialize(message));
+      }
     }
 
     switch (message.type) {
