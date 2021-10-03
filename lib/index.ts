@@ -1,6 +1,7 @@
 import cluster = require("cluster");
 import { Adapter, BroadcastOptions, Room } from "socket.io-adapter";
 import { randomBytes } from "crypto";
+import { hostname } from "os";
 
 const randomId = () => randomBytes(8).toString("hex");
 const debug = require("debug")("socket.io-cluster-adapter");
@@ -59,7 +60,10 @@ export function createAdapter(opts: Partial<ClusterAdapterOptions> = {}) {
 export class ClusterAdapter extends Adapter {
   public requestsTimeout: number;
 
-  private workerIds: Set<number> = new Set();
+  private uniqueId = `${hostname()}/${cluster.worker.process.pid}:${
+    cluster.worker.id
+  }`;
+  private workerIds: Set<string> = new Set();
   private requests: Map<string, Request> = new Map();
 
   /**
@@ -76,7 +80,7 @@ export class ClusterAdapter extends Adapter {
 
     this.publish({
       type: EventType.WORKER_INIT,
-      data: cluster.worker.id,
+      data: this.uniqueId,
     });
 
     process.on("message", this.onMessage.bind(this));
@@ -105,7 +109,7 @@ export class ClusterAdapter extends Adapter {
         debug("workers count is now %d", this.workerIds.size);
         this.publish({
           type: EventType.WORKER_PING,
-          data: cluster.worker.id,
+          data: this.uniqueId,
         });
         break;
       case EventType.WORKER_PING:
@@ -379,7 +383,7 @@ export class ClusterAdapter extends Adapter {
         type: EventType.FETCH_SOCKETS,
         data: {
           requestId,
-          workerId: cluster.worker.id,
+          workerId: this.uniqueId,
           opts: ClusterAdapter.serializeOptions(opts),
         },
       });
@@ -446,7 +450,7 @@ export class ClusterAdapter extends Adapter {
       type: EventType.SERVER_SIDE_EMIT,
       data: {
         requestId, // the presence of this attribute defines whether an acknowledgement is needed
-        workerId: cluster.worker.id,
+        workerId: this.uniqueId,
         packet,
       },
     });
@@ -467,19 +471,19 @@ export function setupPrimary(pubFunc?: (msg: any) => void) {
     switch (message.type) {
       case EventType.FETCH_SOCKETS_RESPONSE:
       case EventType.SERVER_SIDE_EMIT_RESPONSE:
-        const workerId = message.data.workerId;
+        const [, wIdAsString] = message.data.workerId.split(":");
+        const workerId = parseInt(wIdAsString);
         // emit back to the requester
         if (hasOwnProperty.call(cluster.workers, workerId)) {
           cluster.workers[workerId].send(message);
         }
         break;
       default:
-        const emitterIdAsString = "" + worker.id;
         // emit to all workers but the requester
         for (const workerId in cluster.workers) {
           if (
             hasOwnProperty.call(cluster.workers, workerId) &&
-            workerId !== emitterIdAsString
+            workerId !== "" + worker.id
           ) {
             cluster.workers[workerId].send(message);
           }
@@ -491,7 +495,7 @@ export function setupPrimary(pubFunc?: (msg: any) => void) {
     const message = {
       source: MESSAGE_SOURCE,
       type: EventType.WORKER_EXIT,
-      data: worker.id,
+      data: `${hostname()}/${worker.process.pid}:${worker.id}`,
     };
     if (pubFunc) pubFunc(message);
 
@@ -503,5 +507,5 @@ export function setupPrimary(pubFunc?: (msg: any) => void) {
     }
   });
 
-  if (pubFunc) return (msg: any) => cluster.emit("message", -1, msg);
+  if (pubFunc) return (msg: any) => cluster.emit("message", { id: -1 }, msg);
 }
