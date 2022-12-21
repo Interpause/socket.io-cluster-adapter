@@ -1,5 +1,5 @@
 import cluster = require("cluster");
-import { Adapter, BroadcastOptions, Room } from "socket.io-adapter";
+import { Adapter, BroadcastFlags, BroadcastOptions, Room } from "socket.io-adapter";
 import { randomBytes } from "crypto";
 import { hostname } from "os";
 
@@ -27,6 +27,53 @@ enum EventType {
   SERVER_SIDE_EMIT_RESPONSE,
 }
 
+// upgrading ts version would allow template literal here
+type workerId = string;
+
+type Message = {
+  source?: typeof MESSAGE_SOURCE;
+} & (
+  | {
+      type:
+        | EventType.WORKER_INIT
+        | EventType.WORKER_PING
+        | EventType.WORKER_EXIT;
+      data: workerId;
+    }
+  | {
+      type: EventType.BROADCAST;
+      data: PacketData;
+    }
+  | {
+      type: EventType.SOCKETS_JOIN;
+      data: workerId;
+    }
+  | {
+      type: EventType.SOCKETS_LEAVE;
+      data: workerId;
+    }
+  | {
+      type: EventType.DISCONNECT_SOCKETS;
+      data: workerId;
+    }
+  | {
+      type: EventType.FETCH_SOCKETS;
+      data: workerId;
+    }
+  | {
+      type: EventType.FETCH_SOCKETS_RESPONSE;
+      data: SocketData;
+    }
+  | {
+      type: EventType.SERVER_SIDE_EMIT;
+      data: workerId;
+    }
+  | {
+      type: EventType.SERVER_SIDE_EMIT_RESPONSE;
+      data: PacketData;
+    }
+);
+
 interface Request {
   type: EventType;
   resolve: Function;
@@ -34,6 +81,31 @@ interface Request {
   expected: number;
   current: number;
   responses: any[];
+}
+
+interface MessageData {
+  requestId?: string;
+  workerId: string;
+}
+
+interface Socket {
+  id: any;
+  handshake: any;
+  rooms: any[];
+  data: any;
+}
+
+interface SocketData extends MessageData {
+  sockets: Socket[];
+}
+
+interface PacketData extends MessageData {
+  packet: any
+  opts?: {
+    rooms: string[];
+    except: string[];
+    flags: BroadcastFlags;
+}
 }
 
 export interface ClusterAdapterOptions {
@@ -150,7 +222,7 @@ export class ClusterAdapter extends Adapter {
       }
       case EventType.FETCH_SOCKETS: {
         debug("calling fetchSockets with opts %j", message.data.opts);
-        const localSockets = await super.fetchSockets(
+        const localSockets: Socket[] = await super.fetchSockets(
           ClusterAdapter.deserializeOptions(message.data.opts)
         );
 
@@ -236,7 +308,7 @@ export class ClusterAdapter extends Adapter {
     }
   }
 
-  private async publish(message: any) {
+  private async publish(message: Message) {
     // to be able to ignore unrelated messages on the cluster message bus
     message.source = MESSAGE_SOURCE;
     // to be able to ignore messages from other namespaces
